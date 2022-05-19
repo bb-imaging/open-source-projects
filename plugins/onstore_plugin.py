@@ -4,11 +4,18 @@ import redis
 import os
 
 
+def _get_orthanc_host(stage):
+    if stage == "local":
+        return "local"
+    elif stage == "dev":
+        return "dev-redis-url"
+
+
 def OnStoredInstance(dicom, instanceId):
     STAGE = os.getenv("STAGE") or "dev"
-
-    host = "localhost" if STAGE == "local" else "redis"
-    redis_client = redis.Redis(host=host, port=6379, db=0, decode_responses=True)
+    host = _get_orthanc_host(STAGE)
+    redis_client = redis.Redis(
+        host=host, port=6379, db=0, decode_responses=True)
     if redis_client.ping():
         print(f"redis connected at {host}:6379")
     else:
