@@ -1,9 +1,25 @@
 import json
 import orthanc
 import os
+import boto3
+from datetime import date
 
-# Path to the directory containing the DICOM worklists
-WORKLIST_DIR = os.getenv('WORKLIST_DIR', '/mnt/efs')
+WORKLIST_BUCKET_NAME = os.getenv("WORKLIST_BUCKET_NAME")
+
+def get_worklist_answers(prefix, query, answers):
+    s3_client = boto3.client('s3')
+    s3_resource = boto3.resource("s3")
+    s3_bucket = s3_resource.Bucket(WORKLIST_BUCKET_NAME)
+    files = s3_bucket.objects.filter(Prefix=prefix)
+
+    for file in files:
+        s3_response_object = s3_client.get_object(Bucket=WORKLIST_BUCKET_NAME, Key=file.key)
+        object_content = s3_response_object['Body'].read()
+
+        # Test whether the query matches the current worklist
+        if query.WorklistIsMatch(object_content):
+            orthanc.LogInfo(f'Matching worklist: {file.key}')
+            answers.WorklistAddAnswer(query, object_content)
 
 
 def worklist_callback(answers, query, issuerAet, calledAet):
@@ -19,6 +35,11 @@ def worklist_callback(answers, query, issuerAet, calledAet):
             Returns:
                     0 if success, other value if error.
     '''
+    PLUGINS_ENABLED = os.getenv("PLUGINS_ENABLED", "false")
+    if not PLUGINS_ENABLED == "true":
+        orthanc.LogInfo("Plugins disabled. Skipping worklist retrieval")
+        return
+
     # TODO: Handle if the path doesn't exist (No worklist created before FIND query)
     orthanc.LogInfo(
         f"Received incoming C-FIND worklist request from {issuerAet} calling {calledAet}:")
@@ -33,20 +54,12 @@ def worklist_callback(answers, query, issuerAet, calledAet):
     orthanc.LogInfo(f"C-FIND worklist request to be handled in Python: " +
                     json.dumps(json_tags, indent=4, sort_keys=True))
 
-    aet_worklist_dir = os.path.join(WORKLIST_DIR, calledAet)
+    orthanc.LogInfo(f"will look for worklist in {WORKLIST_BUCKET_NAME}")
 
-    orthanc.LogInfo(f"will look for worklist in {aet_worklist_dir}")
-
-    # Loop over the available DICOM worklists
-    for path in os.listdir(aet_worklist_dir):
-        if os.path.splitext(path)[1] == '.wl':
-            with open(os.path.join(aet_worklist_dir, path), 'rb') as f:
-                content = f.read()
-
-                # Test whether the query matches the current worklist
-                if query.WorklistIsMatch(content):
-                    orthanc.LogInfo('Matching worklist: %s' % path)
-                    answers.WorklistAddAnswer(query, content)
+    _, tenant_id, clinic_id, ultrasound_machine_id = calledAet.split("_")
+    today = date.today().strftime("%d_%B_%Y") # '03_August_2022'
+    prefix = f'{tenant_id}/{clinic_id}/{ultrasound_machine_id}/{today}'
+    get_worklist_answers(prefix, query, answers)
 
 
 orthanc.RegisterWorklistCallback(worklist_callback)
